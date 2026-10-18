@@ -180,8 +180,12 @@ export default function Dashboard() {
 
       {/* B — KPI strip */}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <RevenueSwitchKpi crms={crms} year={filters.to} />
-        {a.kpis.slice(1, 4).map(k => <KpiCard key={k.id} k={k} />)}
+        {a.kpis.slice(0, 4).map((k, idx) => {
+          if (idx === 1) {
+            return <RevenueSwitchKpi key="leader-switch" crms={crms} year={filters.to} />
+          }
+          return <KpiCard key={k.id} k={k} />
+        })}
       </section>
 
       {/* C — Market pulse */}
