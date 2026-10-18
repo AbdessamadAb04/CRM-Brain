@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body, #root {
+    height: 100%; width: 100%; overflow: hidden;
+    background: #060d1f; color: #e2e8f0;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 14px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: #060d1f; }
+  ::-webkit-scrollbar-thumb { background: #243d66; border-radius: 2px; }
+}
+
+@layer components {
+  .card { @apply bg-bg2 border border-b1 rounded-xl p-5; }
+  .card-sm { @apply bg-bg2 border border-b1 rounded-xl p-4; }
+
+  .nav-item {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer
+           text-slate-400 text-[13px] font-medium transition-all duration-150
+           hover:bg-bg3 hover:text-slate-200 border border-transparent w-full;
+  }
+  .nav-item.active { @apply bg-sfblue/10 border-sfblue/25 text-sfblue; }
+
+  .btn {
+    @apply px-4 py-2 rounded-lg text-xs font-semibold transition-all duration-150
+           border cursor-pointer;
+  }
+  .btn-blue { @apply bg-sfblue/10 text-sfblue border-sfblue/30 hover:bg-sfblue/20; }
+  .btn-green { @apply bg-sfgreen/10 text-sfgreen border-sfgreen/30 hover:bg-sfgreen/20; }
+  .btn-amber { @apply bg-sfamber/10 text-sfamber border-sfamber/30 hover:bg-sfamber/20; }
+  .btn-ghost { @apply bg-bg3 text-slate-400 border-b1 hover:text-slate-200; }
+
+  .badge { @apply inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold; }
+  .badge-blue { @apply bg-sfblue/15 text-sfblue; }
+  .badge-green { @apply bg-sfgreen/15 text-sfgreen; }
+  .badge-amber { @apply bg-sfamber/15 text-sfamber; }
+  .badge-purple { @apply bg-sfpurple/15 text-sfpurple; }
+  .badge-red { @apply bg-sfred/15 text-sfred; }
+
+  .data-table { @apply w-full border-collapse; }
+  .data-table th { @apply text-[10px] font-semibold text-slate-500 text-left px-3 py-2.5 bg-bg3 border-b border-b1; }
+  .data-table td { @apply text-xs px-3 py-2.5 border-b border-b1/30 align-top; }
+  .data-table tr:hover td { @apply bg-bg3/40; }
+
+  .prog-bar { @apply h-1.5 rounded-full bg-bg3 overflow-hidden; }
+  .prog-fill { @apply h-full rounded-full transition-all duration-500; }
+
+  .section-title { @apply text-xl font-extrabold text-slate-100 mb-1; }
+  .section-sub { @apply text-sm text-slate-400 mb-5; }
+
+  .input-field {
+    @apply bg-bg3 border border-b1 rounded-lg px-3 py-2 text-xs text-slate-200
+           placeholder-slate-500 outline-none focus:border-sfblue/50 transition-colors
+           font-sans w-full;
+  }
+  .textarea-field {
+    @apply bg-bg3 border border-b1 rounded-lg px-3 py-2 text-xs text-slate-200
+           placeholder-slate-500 outline-none focus:border-sfblue/50 transition-colors
+           font-sans w-full resize-none;
+  }
+}
