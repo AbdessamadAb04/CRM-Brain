@@ -1,16 +1,18 @@
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, RadarChart, Radar,
   PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, CartesianGrid, Legend,
+  ResponsiveContainer, CartesianGrid, Legend, ReferenceLine,
 } from 'recharts'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
+import { Repeat } from 'lucide-react'
 import FilterBar from '../analysis/FilterBar'
-import { useAnalysis, fmtMoney, fmtB, pct } from '../../hooks/useAnalysis'
-import type { Kpi, SalaryRow } from '../../hooks/useAnalysis'
+import { useAnalysis, fmtMoney, fmtB, pct, resampleSeries, MONTHS_FR } from '../../hooks/useAnalysis'
+import type { Kpi, SalaryRow, SeriesPoint } from '../../hooks/useAnalysis'
 import {
   CAREER_PATH, CATALYSTS, SOURCES, CONFIDENCE_COLOR,
   ENTERPRISE_ADOPTION, CRM_ROI, CONSULTING_BACKLOG,
-  crmById, revenueOf,
+  crmById, revenueOf, shareOf,
 } from '../../data/analysis'
 
 const TT = { contentStyle:{background:'#0f1e38',border:'1px solid #1e3356',borderRadius:6}, labelStyle:{color:'#e2e8f0'} }
@@ -23,18 +25,58 @@ const BADGE: Record<Kpi['badge'], { c: string; label: string }> = {
   Projeté: { c: '#8b5cf6', label: '○ projeté' },
 }
 
-function KpiCard({ k, onClick, title }: { k: Kpi; onClick?: () => void; title?: string }) {
+type ChartLine = { key: string; name: string; color: string; dash?: boolean; fill?: boolean }
+
+type ChartCfg = {
+  title: string
+  data: SeriesPoint[]
+  color: string
+  fmt: (v: number | string) => [string, string]
+  lines: ChartLine[]
+}
+
+const JOBS_REF_YEAR = 2026
+
+// Tick X personnalisé — met en valeur la date du jour en bleu SF
+function ChartTick({ x = 0, y = 0, payload, today }: {
+  x?: number; y?: number; payload?: { value?: string | number }; today?: string
+}) {
+  const val = String(payload?.value ?? '')
+  const isToday = today !== undefined && val === today
+  return (
+    <text x={x} y={y} dy={16} textAnchor="middle" fontSize={9}
+      fontWeight={isToday ? 700 : 400}
+      fill={isToday ? '#00a3e0' : '#64748b'}>
+      {val}
+    </text>
+  )
+}
+
+// Emplois générés par un écosystème (M) — ancré sur 2026, pondéré par l'index emplois du vendor
+const jobsPerCrm = (id: string, year: number, mFactor: number): number => {
+  const ref = revenueOf(id, JOBS_REF_YEAR)
+  if (ref <= 0) return 0
+  return (crmById(id).jobsIndex / 100 * 9.3) * (revenueOf(id, year) / ref) * mFactor
+}
+
+function KpiCard({ k, onClick, selected, action, title, hFull, labelNode }: {
+  k: Kpi; onClick?: () => void; selected?: boolean; action?: ReactNode; title?: string; hFull?: boolean; labelNode?: ReactNode
+}) {
   const b = BADGE[k.badge]
   const trendColor = k.trend > 0 ? '#10b981' : k.trend < 0 ? '#ef4444' : '#94a3b8'
   return (
     <div
-      className={`card-sm flex flex-col gap-1.5 transition-all duration-150 ${onClick ? 'cursor-switch hover:border-sfblue/40 hover:bg-bg4/60 hover:shadow-lg hover:shadow-sfblue/5' : ''}`}
+      className={`card-sm flex flex-col gap-1.5 transition-all duration-150 ${hFull ? 'h-full justify-between' : ''} ${onClick ? 'cursor-pointer hover:border-sfblue/40 hover:bg-bg4/60 hover:shadow-lg hover:shadow-sfblue/5' : ''}`}
       onClick={onClick}
       title={title}
+      style={selected ? { borderColor: k.color, background: `${k.color}0d`, boxShadow: `0 8px 24px -10px ${k.color}66` } : undefined}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] text-slate-500 font-semibold">{k.label}</span>
-        <span className="text-[8px] font-bold uppercase tracking-wide shrink-0" style={{ color: b.c }}>{b.label}</span>
+        <span className={`${labelNode ? 'text-[11px]' : 'text-[10px]'} text-slate-500 font-semibold`}>{labelNode ?? k.label}</span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {action}
+          <span className="text-[8px] font-bold uppercase tracking-wide" style={{ color: b.c }}>{b.label}</span>
+        </div>
       </div>
       <div className="text-2xl font-extrabold tabular-nums leading-none" style={{ color: k.color }}>{k.value}</div>
       <div className="flex items-center justify-between gap-2">
@@ -45,9 +87,11 @@ function KpiCard({ k, onClick, title }: { k: Kpi; onClick?: () => void; title?: 
   )
 }
 
-function RevenueSwitchKpi({ crms, year }: { crms: string[]; year: number }) {
-  const [idx, setIdx] = useState(0)
+function RevenueSwitchKpi({ crms, year, idx, onSwitch, selected, onSelect }: {
+  crms: string[]; year: number; idx: number; onSwitch: () => void; selected: boolean; onSelect: () => void
+}) {
   const safe = crms.length ? crms[idx % crms.length] : 'salesforce'
+  const nextId = crms.length ? crms[(idx + 1) % crms.length] : 'salesforce'
   const c = crmById(safe)
   const k: Kpi = {
     id: 'leader',
@@ -62,8 +106,20 @@ function RevenueSwitchKpi({ crms, year }: { crms: string[]; year: number }) {
   return (
     <KpiCard
       k={k}
-      onClick={() => setIdx(i => i + 1)}
-      title="Cliquer pour basculer vers un autre écosystème sélectionné"
+      selected={selected}
+      onClick={onSelect}
+      hFull
+      labelNode={<>Revenu <span style={{ color: c.color }}>{c.short}</span></>}
+      title="Cliquer pour afficher la trajectoire de cet écosystème dans le graphique"
+      action={
+        <button
+          onClick={e => { e.stopPropagation(); onSwitch() }}
+          title={`Basculer vers ${crmById(nextId).short}`}
+          className="p-1 rounded hover:bg-bg4 text-slate-500 hover:text-slate-200 transition-colors"
+        >
+          <Repeat size={15} />
+        </button>
+      }
     />
   )
 }
@@ -151,8 +207,166 @@ function GapBars({ rows }: { rows: SalaryRow[] }) {
 
 export default function Dashboard() {
   const a = useAnalysis()
-  const { filters, series, crms, donut, movers, matrix, radar, radarCrms, salaries } = a
+  const { filters, series, years, crms, donut, movers, matrix, radar, radarCrms, salaries, mFactor } = a
   const twoCrms = crms.length > 1
+
+  const [selKpi, setSelKpi] = useState('size')
+  const [revIdx, setRevIdx] = useState(0)
+  const revCrm = crms[revIdx % crms.length] ?? 'salesforce'
+
+  // Emplois génériques — somme par écosystème sélectionné
+  const jobsEcoAt = (y: number) => crms.reduce((s, id) => s + jobsPerCrm(id, y, mFactor), 0)
+  const jobsEcoDelta = filters.from < filters.to && jobsEcoAt(filters.from) > 0
+    ? ((jobsEcoAt(filters.to) - jobsEcoAt(filters.from)) / jobsEcoAt(filters.from)) * 100
+    : 0
+  const jobsEcoKpi: Kpi = {
+    id: 'jobsEco',
+    label: 'Emplois par écosystème',
+    value: `${jobsEcoAt(filters.to).toFixed(1)}M`,
+    delta: pct(jobsEcoDelta),
+    note: 'M · somme CRM sélectionnés',
+    color: '#14b8a6',
+    badge: 'Projeté',
+    trend: jobsEcoDelta >= 0 ? 1 : -1,
+  }
+
+  // Croissance AI / Agents — CAGR du revenu pondéré par la maturité AI des écosystèmes
+  const aiRevOf = (id: string, y: number) => revenueOf(id, y) * (crmById(id).aiReadiness / 100)
+  const aiRevAt = (y: number) => crms.reduce((s, id) => s + aiRevOf(id, y), 0)
+  const aiGrowthCagr = filters.from < filters.to && aiRevAt(filters.from) > 0
+    ? (Math.pow(aiRevAt(filters.to) / aiRevAt(filters.from), 1 / (filters.to - filters.from)) - 1) * 100
+    : 0
+  const aiGrowthKpi: Kpi = {
+    id: 'aiGrowth',
+    label: 'Croissance AI / Agents',
+    value: pct(aiGrowthCagr),
+    delta: fmtB(aiRevAt(filters.to)),
+    note: 'CAGR AI-weighted · sélection',
+    color: '#8b5cf6',
+    badge: 'Projeté',
+    trend: aiGrowthCagr >= 0 ? 1 : -1,
+  }
+
+  // Part de marché — suivant l'écosystème choisi sur la carte « Revenu »
+  const shareCrm = crmById(revCrm)
+  const shareNow = shareOf(revCrm, filters.to)
+  const shareDelta = shareNow - shareOf(revCrm, filters.from)
+  const shareKpi: Kpi = {
+    id: 'share',
+    label: 'Part du leader',
+    value: `${shareNow.toFixed(1)}%`,
+    delta: `${shareDelta >= 0 ? '+' : ''}${shareDelta.toFixed(2)} pts`,
+    note: `vs ${filters.from}`,
+    color: shareCrm.color,
+    badge: 'Observé',
+    trend: shareDelta >= 0 ? 1 : -1,
+  }
+
+  const chartCfg: ChartCfg = useMemo(() => {
+    const gl = GRAIN_LABEL[filters.grain] ?? ''
+    if (selKpi === 'leader') {
+      const c = crmById(revCrm)
+      const annual = years.map(y => ({ year: y, total: 0, v: +revenueOf(revCrm, y).toFixed(2) }))
+      return {
+        title: `Revenu ${c.short} — ${filters.from}–${filters.to} ($B, USD) · ${gl}`,
+        data: resampleSeries(annual, filters.grain, ['v']),
+        color: c.color,
+        fmt: v => [`$${Number(v).toFixed(1)}B`, c.name],
+        lines: [{ key: 'v', name: c.name, color: c.color, fill: true }],
+      }
+    }
+    if (selKpi === 'share') {
+      const c = crmById(revCrm)
+      const annual = years.map(y => ({ year: y, total: 0, v: +shareOf(revCrm, y).toFixed(2) }))
+      return {
+        title: `Part de marché ${c.short} — ${filters.from}–${filters.to} (% mondial) · ${gl}`,
+        data: resampleSeries(annual, filters.grain, ['v']),
+        color: c.color,
+        fmt: v => [`${Number(v).toFixed(1)}%`, c.name],
+        lines: [{ key: 'v', name: `Part ${c.short}`, color: c.color, fill: true }],
+      }
+    }
+    if (selKpi === 'aiGrowth') {
+      const annual = years.map(y => {
+        const p: { year: number; total: number; [key: string]: number } = { year: y, total: 0 }
+        for (const id of crms) { p[id] = +aiRevOf(id, y).toFixed(3); p.total = +(p.total + p[id]).toFixed(3) }
+        return p
+      })
+      return {
+        title: `Revenu AI / Agents — ${filters.from}–${filters.to} ($B pondéré AI) · ${gl}`,
+        data: resampleSeries(annual, filters.grain, ['total', ...crms]),
+        color: '#8b5cf6',
+        fmt: v => [`$${Number(v).toFixed(2)}B`, 'AI-weighted'],
+        lines: [
+          ...crms.map(id => ({
+            key: id, name: donut.find(dd => dd.id === id)?.name ?? id,
+            color: donut.find(dd => dd.id === id)?.color ?? '#8b5cf6',
+            fill: crms.length === 1,
+          })),
+          ...(crms.length > 1 ? [{ key: 'total', name: 'Total AI sélection', color: '#8b5cf6', dash: true, fill: true }] : []),
+        ],
+      }
+    }
+    if (selKpi === 'jobsEco') {
+      const annual = years.map(y => {
+        const p: { year: number; total: number; [key: string]: number } = { year: y, total: 0 }
+        for (const id of crms) { p[id] = +jobsPerCrm(id, y, mFactor).toFixed(3); p.total = +(p.total + p[id]).toFixed(3) }
+        return p
+      })
+      return {
+        title: `Emplois par écosystème — projection ${filters.from}–${filters.to} (M) · ${gl}`,
+        data: resampleSeries(annual, filters.grain, ['total', ...crms]),
+        color: '#14b8a6',
+        fmt: v => [`${Number(v).toFixed(2)}M`, 'emplois'],
+        lines: [
+          ...crms.map(id => ({
+            key: id, name: donut.find(dd => dd.id === id)?.name ?? id,
+            color: donut.find(dd => dd.id === id)?.color ?? '#14b8a6',
+            fill: crms.length === 1,
+          })),
+          ...(crms.length > 1 ? [{ key: 'total', name: 'Total sélection', color: '#14b8a6', dash: true, fill: true }] : []),
+        ],
+      }
+    }
+    return {
+      title: `Trajectoire marché & écosystèmes ${filters.from}–${filters.to} ($B, USD) · ${gl}`,
+      data: series,
+      color: '#00a3e0',
+      fmt: v => [`$${Number(v).toFixed(1)}B`, ''],
+      lines: [
+        ...crms.map(id => ({
+          key: id, name: donut.find(dd => dd.id === id)?.name ?? id,
+          color: donut.find(dd => dd.id === id)?.color ?? '#00a3e0',
+          fill: crms.length === 1,
+        })),
+        ...(crms.length > 1 ? [{ key: 'total', name: 'Total sélection', color: '#00a3e0', dash: true, fill: true }] : []),
+      ],
+    }
+  }, [selKpi, revCrm, years, filters, series, crms, donut, a])
+
+  // Libellé de la période contenant aujourd'hui (selon le grain)
+  const todayLabel = useMemo(() => {
+    const d = new Date()
+    const y = d.getFullYear()
+    const m = d.getMonth()
+    if (filters.grain === 'year') return String(y)
+    if (filters.grain === 'quarter') return `${y} Q${Math.floor(m / 3) + 1}`
+    return `${MONTHS_FR[m]} ${String(y).slice(2)}`
+  }, [filters.grain])
+
+  // Tick list explicite (sous-échantillon) — garantit l'affichage du jour + bornes
+  const axisTicks = useMemo(() => {
+    const labels = chartCfg.data.map(p => p.label)
+    if (labels.length <= 7) return labels
+    const step = Math.ceil(labels.length / 6)
+    const keep = new Set<string>()
+    for (let i = 0; i < labels.length; i += step) keep.add(labels[i])
+    keep.add(labels[labels.length - 1])
+    if (labels.includes(todayLabel)) keep.add(todayLabel)
+    return labels.filter(l => keep.has(l))
+  }, [chartCfg.data, todayLabel])
+
+  const hasToday = chartCfg.data.some(p => p.label === todayLabel)
 
   const exportCsv = () => {
     const head = ['Vendor', 'Revenu (B$)', 'Part (%)', 'CAGR (%)', 'AI readiness', 'Jobs index', 'Certs', 'Score', 'Force']
@@ -179,13 +393,26 @@ export default function Dashboard() {
       <FilterBar />
 
       {/* B — KPI strip */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {a.kpis.slice(0, 4).map((k, idx) => {
-          if (idx === 1) {
-            return <RevenueSwitchKpi key="leader-switch" crms={crms} year={filters.to} />
-          }
-          return <KpiCard key={k.id} k={k} />
-        })}
+      <section className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <KpiCard k={a.kpis[0]} selected={selKpi === a.kpis[0].id} hFull
+          title="Cliquer pour afficher cette métrique dans le graphique"
+          onClick={() => setSelKpi(a.kpis[0].id)} />
+        <KpiCard k={jobsEcoKpi} selected={selKpi === jobsEcoKpi.id} hFull
+          title="Cliquer pour afficher les emplois par écosystème dans le graphique"
+          onClick={() => setSelKpi('jobsEco')} />
+        <KpiCard k={aiGrowthKpi} selected={selKpi === aiGrowthKpi.id} hFull
+          title="Cliquer pour afficher la trajectoire du revenu AI / Agents dans le graphique"
+          onClick={() => setSelKpi('aiGrowth')} />
+        <div className="md:col-span-2 rounded-xl border border-b1 bg-bg3/40 p-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 h-full">
+            <RevenueSwitchKpi crms={crms} year={filters.to}
+              idx={revIdx} onSwitch={() => setRevIdx(i => i + 1)}
+              selected={selKpi === 'leader'} onSelect={() => setSelKpi('leader')} />
+            <KpiCard k={shareKpi} selected={selKpi === shareKpi.id} hFull
+              title="Cliquer pour afficher la part de marché de cet écosystème dans le graphique"
+              onClick={() => setSelKpi('share')} />
+          </div>
+        </div>
       </section>
 
       {/* C — Market pulse */}
@@ -196,26 +423,37 @@ export default function Dashboard() {
         </h2>
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
           <div className="card xl:col-span-2">
-            <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wide mb-3">
-              Trajectoire marché & écosystèmes {filters.from}–{filters.to} ($B, USD) · {GRAIN_LABEL[filters.grain] ?? ''}
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wide">{chartCfg.title}</div>
+              {selKpi !== 'size' && (
+                <button onClick={() => setSelKpi('size')} title="Revenir à la vue marché globale"
+                  className="btn btn-ghost text-[9px] px-2 py-0.5 shrink-0">
+                  ↺ Vue marché
+                </button>
+              )}
             </div>
             <ResponsiveContainer width="100%" height={240}>
-              <AreaChart data={series}>
+              <AreaChart data={chartCfg.data}>
                 <defs>
-                  <linearGradient id="mkt" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#00a3e0" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#00a3e0" stopOpacity={0} />
+                  <linearGradient id="kpiFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={chartCfg.color} stopOpacity={0.25} />
+                    <stop offset="95%" stopColor={chartCfg.color} stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e3356" />
-                <XAxis dataKey="label" tick={{ fill:'#64748b', fontSize:9 }} minTickGap={28} />
+                <XAxis dataKey="label" ticks={axisTicks} interval={0}
+                  tick={<ChartTick today={hasToday ? todayLabel : undefined} />} />
                 <YAxis tick={{ fill:'#64748b', fontSize:9 }} />
-                <Tooltip {...TT} formatter={(v) => [`$${Number(v).toFixed(1)}B`, '']} />
+                <Tooltip {...TT} formatter={chartCfg.fmt} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
-                <Area type="monotone" dataKey="total" name="Marché total" stroke="#00a3e0" fill="url(#mkt)" strokeWidth={2} dot={false} />
-                {crms.map(id => (
-                  <Area key={id} type="monotone" dataKey={id} name={donut.find(dd => dd.id === id)?.name ?? id}
-                    stroke={donut.find(dd => dd.id === id)?.color} fill="none" strokeWidth={2} dot={false} />
+                {hasToday && (
+                  <ReferenceLine x={todayLabel} stroke="#00a3e0" strokeWidth={1}
+                    strokeOpacity={0.35} strokeDasharray="3 4" />
+                )}
+                {chartCfg.lines.map(l => (
+                  <Area key={l.key} type="monotone" dataKey={l.key} name={l.name}
+                    stroke={l.color} fill={l.fill ? 'url(#kpiFill)' : 'none'}
+                    strokeDasharray={l.dash ? '6 4' : undefined} strokeWidth={2} dot={false} />
                 ))}
               </AreaChart>
             </ResponsiveContainer>
@@ -338,7 +576,10 @@ export default function Dashboard() {
               <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wide">
                 Rémunération estimée — {filters.seniority}, {filters.currency}
               </div>
-              <StatHighlight k={a.kpi('salary')} compact />
+              <div className="flex items-center gap-2 flex-wrap">
+                <StatHighlight k={a.kpi('salary')} compact />
+                <StatHighlight k={a.kpi('jobs')} compact />
+              </div>
             </div>
             <SalaryBars rows={salaries} currency={filters.currency} />
           </div>
